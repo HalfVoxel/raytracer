@@ -120,7 +120,7 @@ class Sphere : Shape {
 
 		backface = false;
 
-		vec3 p = origin + direction*dist;
+		/*vec3 p = origin + direction*dist;
 		if (cast(int)(p.y*20 + sin(p.x*12)*0.2f) % 2 == 0 ) {
 			
 			backface = true;
@@ -129,7 +129,7 @@ class Sphere : Shape {
 			if (cast(int)(p.y*20 + sin(p.x*12)*0.2f) % 2 == 0 ) {
 				return float.infinity;
 			}
-		}
+		}*/
 		//dist *= 1.0f + 0.3f * sin(p.x*3) * cos(p.y*3);
 
 		return dist;
@@ -153,6 +153,25 @@ static vec3 reflect ( vec3 v, vec3 normal ) {
 	return p + (p-v);
 }
 
+static vec3 randomInUnitSphere () {
+	vec3 res;
+	do {
+		res = vec3(uniform(0f, 1f), uniform(0f, 1f), uniform(0f, 1f));
+	} while (dot(res,res) > 1);
+	return res;
+}
+
+static void vec4ToPixels(vec4[] inPixels, Pixel[] outPixels) {
+	foreach (i, vec4 color; inPixels) {
+		Pixel px;
+		px.r = cast(ubyte)(max(0,min(255,255*color.r)));
+		px.g = cast(ubyte)(max(0,min(255,255*color.g)));
+		px.b = cast(ubyte)(max(0,min(255,255*color.b)));
+		px.a = cast(ubyte)(max(0,min(255,255*color.a)));
+		px.a = 255;
+		outPixels[i] = px;
+	}
+}
 struct Settings {
 	int maxDepth;
 	int emissiveRays;
@@ -237,7 +256,9 @@ class Scene {
 
 		if ( firstShape.mat.reflectivity > 0 ) {
 			auto newDir = reflect ( -rayDir, normal );
+			newDir += randomInUnitSphere() * 0.5f;
 			float dummy;
+
 			vec4 crefl = getColor ( point, newDir, depth+1, dummy);
 			
 			//writeln("Colors");
@@ -295,7 +316,6 @@ class Scene {
 					res += c1;
 				}
 				
-			} else {
 			}
 		}
 
@@ -424,17 +444,9 @@ Pixel[] generateImage ( ushort width, ushort height ) {
 	rend.AAPattern = AAPattern;
 	rend.render (vp, width, height, pixels);
 	
-
 	Pixel[] imgPixels = new Pixel[width*height];
-	foreach (i, vec4 color; pixels) {
-		Pixel px;
-		px.r = cast(ubyte)(max(0,min(255,255*color.r)));
-		px.g = cast(ubyte)(max(0,min(255,255*color.g)));
-		px.b = cast(ubyte)(max(0,min(255,255*color.b)));
-		px.a = cast(ubyte)(max(0,min(255,255*color.a)));
-		px.a = 255;
-		imgPixels[i] = px;
-	}
+	vec4ToPixels(pixels, imgPixels);
+	
 	return imgPixels;
 }
 
@@ -542,8 +554,12 @@ class Raytracer : Renderer {
 		auto cameraSize = vp.cameraSize;
 		auto scene = vp.scene;
 
+		Pixel[] imgPixels = new Pixel[width*height];
+
 		foreach ( y; 0 .. height ) {
-			writeln(y/(1.0f*height));
+			if (y % 10 == 0) {
+				writeln(y/(1.0f*height));
+			}
 			float yf = 1 - (y / cast(float)width);
 			foreach ( x; 0 .. width ) {
 
@@ -570,10 +586,13 @@ class Raytracer : Renderer {
 
 		writeln("Supersampling...");
 
-		
+		int oversampling = 8;
+		vec4[] samples = new vec4[width*height];
 
 		foreach ( y; 0 .. height ) {
-			writeln(y/(1.0f*height));
+			if (y % 10 == 0) {
+				writeln(y/(1.0f*height));
+			}
 			float yf = 1 - (y / cast(float)width);
 			foreach ( x; 0 .. width ) {
 
@@ -582,7 +601,7 @@ class Raytracer : Renderer {
 				vec4 color = pixels[x + y*width];
 				vec4 mn = color;
 				vec4 mx = color;
-				for ( int i = 2; i < dx.length; i++ ) {
+				for ( int i = 0; i < dx.length; i++ ) {
 					int nx = x + dx[i];
 					int ny = y + dy[i];
 					if ( nx >= 0 && ny >= 0 && nx < width && ny < height ) {
@@ -597,17 +616,19 @@ class Raytracer : Renderer {
 
 				
 
-				ulong mxi = 1 + cast(ulong)(AAPattern.length * (mx-mn).magnitude_squared*(1.0f/(0.4f*0.4f)));
-				mxi = min(mxi, AAPattern.length);
+				ulong mxi = 1 + cast(ulong)((oversampling * AAPattern.length) * (mx-mn).magnitude_squared*(1.0f/(0.4f*0.4f)));
+				mxi = min(mxi, oversampling * AAPattern.length);
+				//mxi = AAPattern.length;
 				//writeln(mxi);
 				//writeln(color);
 
 				float dist;
 				foreach (i; 1..mxi) {
-					vec4 c = scene.getColor ( rayOrig + AAPattern[i], rayDir, 0, dist);
+					vec4 c = scene.getColor ( rayOrig + AAPattern[i % AAPattern.length], rayDir, 0, dist);
 					color += c;
 				}
 				color *= (1.0f/mxi);
+				samples[x + y*width] = vec4(1,1,1,1) * mxi / cast(float)(oversampling*AAPattern.length);
 				//color = vec4(mxi/10.0f, 0,0, 1);
 				//writeln((mx-mn).magnitude_squared);
 				//color = vec4(0.01f*(mx-mn).magnitude_squared*(1.0f/(0.04f*0.04f)), 0,0,1);
@@ -615,6 +636,17 @@ class Raytracer : Renderer {
 
 				pixels[x + y*width] = color;
 			}
+
+			if (y % 100 == 0) {
+				vec4ToPixels(pixels, imgPixels);
+				Image img = createImage(imgPixels, width, height);//, ImageType.COMPRESSED_TRUE_COLOR, pixelBitDepth);
+				File outFile = File("output/output" ~ to!string(y) ~ ".tga","w");
+				writeImage(outFile, img);
+			}
 		}
+
+		/*foreach (i; 0 .. pixels.length) {
+			pixels[i] = samples[i];
+		}*/
 	}
 }
